@@ -1,0 +1,9 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# Reproducible notebook outputs
+synthetic_dolphin_chirp.wav
+synthetic_dolphin_chirp_birdcall_contours/
