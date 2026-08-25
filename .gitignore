@@ -6,4 +6,4 @@ __pycache__/
 
 # Reproducible notebook outputs
 synthetic_dolphin_chirp.wav
-synthetic_dolphin_chirp_birdcall_contours/
+synthetic_dolphin_contours/
