@@ -18,7 +18,9 @@ class ExperimentConfig:
 
     sample_rate: int = 24_001
     duration_seconds: float = 0.5
-    true_delay_seconds: float = 0.02
+    true_delay_seconds: tuple[float, ...] = (0.01, 0.02)
+    direct_gain: float = 0.5
+    echo_gains: tuple[float, ...] = (0.2, 0.15)
     noise_std: float = 0.01
     wav_path: Path = Path("synthetic_dolphin_chirp.wav")
     output_dir: Path = Path("synthetic_dolphin_contours")
@@ -26,12 +28,22 @@ class ExperimentConfig:
     analysis_margin_hz: float = 500.0
     min_delay_seconds: float = 0.002
     max_delay_seconds: float = 0.030
+    min_path_separation_seconds: float = 0.002
     window_seconds: float = 256 / 48_000
     delay_error_tolerance_seconds: float = 50e-6
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "wav_path", Path(self.wav_path))
         object.__setattr__(self, "output_dir", Path(self.output_dir))
+        try:
+            true_delays = tuple(float(value) for value in self.true_delay_seconds)
+            echo_gains = tuple(float(value) for value in self.echo_gains)
+        except (TypeError, ValueError, OverflowError) as error:
+            raise ValueError(
+                "true_delay_seconds and echo_gains must be numeric sequences."
+            ) from error
+        object.__setattr__(self, "true_delay_seconds", true_delays)
+        object.__setattr__(self, "echo_gains", echo_gains)
         try:
             integer_rate = int(self.sample_rate)
         except (TypeError, ValueError, OverflowError) as error:
@@ -41,13 +53,16 @@ class ExperimentConfig:
         object.__setattr__(self, "sample_rate", integer_rate)
         numeric_settings = (
             self.duration_seconds,
-            self.true_delay_seconds,
+            self.direct_gain,
             self.noise_std,
             self.analysis_margin_hz,
             self.min_delay_seconds,
             self.max_delay_seconds,
+            self.min_path_separation_seconds,
             self.window_seconds,
             self.delay_error_tolerance_seconds,
+            *self.true_delay_seconds,
+            *self.echo_gains,
             *self.whistle_band_hz,
         )
         if not all(math.isfinite(value) for value in numeric_settings):
@@ -58,6 +73,14 @@ class ExperimentConfig:
             raise ValueError("duration_seconds must be between 0.1 and 2.0 seconds.")
         if self.noise_std < 0:
             raise ValueError("noise_std must be nonnegative.")
+        if not self.true_delay_seconds:
+            raise ValueError("true_delay_seconds must contain at least one echo delay.")
+        if len(self.echo_gains) != len(self.true_delay_seconds):
+            raise ValueError("echo_gains must contain one gain per true delay.")
+        if self.direct_gain <= 0 or any(
+            gain <= 0 or gain >= self.direct_gain for gain in self.echo_gains
+        ):
+            raise ValueError("Echo gains must be positive and weaker than direct_gain.")
         start_hz, end_hz = self.whistle_band_hz
         if not 0 < start_hz < end_hz:
             raise ValueError("whistle_band_hz must contain increasing positive frequencies.")
@@ -67,16 +90,32 @@ class ExperimentConfig:
             raise ValueError("The whistle and analysis margin must remain below Nyquist.")
         if not 0 < self.min_delay_seconds < self.max_delay_seconds:
             raise ValueError("Require 0 < min_delay_seconds < max_delay_seconds.")
-        if not self.min_delay_seconds <= self.true_delay_seconds <= self.max_delay_seconds:
-            raise ValueError("true_delay_seconds must lie inside the evaluation search window.")
-        if self.true_delay_seconds >= self.duration_seconds:
-            raise ValueError("true_delay_seconds must be shorter than the whistle duration.")
+        if self.min_path_separation_seconds <= 0:
+            raise ValueError("min_path_separation_seconds must be positive.")
+        if any(
+            later <= earlier
+            for earlier, later in zip(self.true_delay_seconds, self.true_delay_seconds[1:])
+        ):
+            raise ValueError("true_delay_seconds must be strictly increasing.")
+        if any(
+            delay < self.min_delay_seconds or delay > self.max_delay_seconds
+            for delay in self.true_delay_seconds
+        ):
+            raise ValueError("Every true delay must lie inside the evaluation search window.")
+        if any(delay >= self.duration_seconds for delay in self.true_delay_seconds):
+            raise ValueError("Every true delay must be shorter than the whistle duration.")
+        separation_samples = max(1, round(self.min_path_separation_seconds * self.sample_rate))
+        if any(
+            later - earlier < separation_samples
+            for earlier, later in zip(self.delay_samples, self.delay_samples[1:])
+        ):
+            raise ValueError("True delays are too close at the configured sample rate.")
         if self.window_seconds <= 0 or self.delay_error_tolerance_seconds <= 0:
             raise ValueError("Window duration and delay tolerance must be positive.")
 
     @property
-    def delay_samples(self) -> int:
-        return round(self.true_delay_seconds * self.sample_rate)
+    def delay_samples(self) -> np.ndarray:
+        return np.rint(np.asarray(self.true_delay_seconds) * self.sample_rate).astype(int)
 
     @property
     def delay_error_tolerance_samples(self) -> int:
@@ -100,14 +139,14 @@ class ExperimentConfig:
 
 
 @dataclass(frozen=True)
-class DelayEstimate:
-    delay_samples: int
-    delay_seconds: float
+class MultipathDelayEstimate:
+    delay_samples: np.ndarray
+    delay_seconds: np.ndarray
     response: np.ndarray
     residual_response: np.ndarray
     lags: np.ndarray
     direct_index: int
-    echo_index: int
+    echo_indices: np.ndarray
 
 
 def synthetic_whistle(
@@ -127,6 +166,46 @@ def synthetic_whistle(
     phase = 2 * np.pi * np.concatenate(([0.0], np.cumsum(frequency[:-1]) / sample_rate))
     samples = signal.windows.tukey(count, alpha=taper) * np.sin(phase)
     return time, frequency, samples
+
+
+def synthesize_multipath(
+    source: np.ndarray,
+    delay_samples: np.ndarray | tuple[int, ...] | list[int],
+    echo_gains: np.ndarray | tuple[float, ...] | list[float],
+    *,
+    direct_gain: float = 0.5,
+    noise_std: float = 0.0,
+    seed: int | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return a noisy multi-path signal and its sparse impulse response."""
+    source = np.asarray(source, dtype=float)
+    delays = np.asarray(delay_samples)
+    gains = np.asarray(echo_gains, dtype=float)
+    if source.ndim != 1 or not source.size or not np.all(np.isfinite(source)):
+        raise ValueError("source must be a nonempty, finite one-dimensional array.")
+    if delays.ndim != 1 or not delays.size:
+        raise ValueError("delay_samples must be a nonempty one-dimensional sequence.")
+    if not np.issubdtype(delays.dtype, np.integer):
+        raise ValueError("delay_samples must contain integer sample offsets.")
+    delays = delays.astype(int, copy=False)
+    if np.any(delays <= 0) or np.any(np.diff(delays) <= 0):
+        raise ValueError("delay_samples must contain strictly increasing positive offsets.")
+    if gains.shape != delays.shape or not np.all(np.isfinite(gains)):
+        raise ValueError("echo_gains must contain one finite value per delay.")
+    if not math.isfinite(direct_gain) or direct_gain <= 0:
+        raise ValueError("direct_gain must be a finite positive number.")
+    if np.any(gains <= 0) or np.any(gains >= direct_gain):
+        raise ValueError("Echo gains must be positive and weaker than direct_gain.")
+    if not math.isfinite(noise_std) or noise_std < 0:
+        raise ValueError("noise_std must be a finite nonnegative number.")
+
+    impulse_response = np.zeros(int(delays[-1]) + 1)
+    impulse_response[0] = direct_gain
+    impulse_response[delays] = gains
+    received = signal.convolve(source, impulse_response)
+    if noise_std:
+        received += noise_std * np.random.default_rng(seed).standard_normal(received.size)
+    return received, impulse_response
 
 
 def template_from_contour(
@@ -185,15 +264,18 @@ def template_from_contour(
     return template, fitted
 
 
-def estimate_delay(
+def estimate_delays(
     received: np.ndarray,
     template: np.ndarray,
     sample_rate: int,
+    *,
+    num_echoes: int,
     min_delay_seconds: float = 0.002,
     max_delay_seconds: float = 0.030,
+    min_path_separation_seconds: float = 0.002,
     prominence_ratio: float = 0.10,
-) -> DelayEstimate:
-    """Estimate echo separation after cancelling the dominant direct arrival."""
+) -> MultipathDelayEstimate:
+    """Estimate delayed paths after cancelling the dominant direct arrival."""
     received = np.asarray(received, dtype=float)
     template = np.asarray(template, dtype=complex)
     if received.ndim != 1 or template.ndim != 1 or not received.size or not template.size:
@@ -202,8 +284,14 @@ def estimate_delay(
         raise ValueError("received and template must contain only finite values.")
     if sample_rate <= 0:
         raise ValueError("sample_rate must be positive.")
+    if isinstance(num_echoes, bool) or not isinstance(num_echoes, (int, np.integer)):
+        raise ValueError("num_echoes must be a positive integer.")
+    if num_echoes <= 0:
+        raise ValueError("num_echoes must be a positive integer.")
     if not 0 < min_delay_seconds < max_delay_seconds:
         raise ValueError("Require 0 < min_delay_seconds < max_delay_seconds.")
+    if min_path_separation_seconds <= 0:
+        raise ValueError("min_path_separation_seconds must be positive.")
     if not 0 < prominence_ratio < 1:
         raise ValueError("prominence_ratio must lie strictly between 0 and 1.")
 
@@ -225,27 +313,32 @@ def estimate_delay(
 
     minimum = max(1, round(min_delay_seconds * sample_rate))
     maximum = round(max_delay_seconds * sample_rate)
+    minimum_separation = max(1, round(min_path_separation_seconds * sample_rate))
     peaks, _ = signal.find_peaks(
         residual_magnitude,
-        distance=minimum,
+        distance=minimum_separation,
         prominence=prominence_ratio * magnitude[direct],
     )
     candidates = peaks[
         (lags[peaks] >= lags[direct] + minimum)
         & (lags[peaks] <= lags[direct] + maximum)
     ]
-    if not candidates.size:
-        raise RuntimeError("No credible delayed peak remained after direct-path cancellation.")
-    echo = int(candidates[np.argmax(residual_magnitude[candidates])])
-    delay = int(lags[echo] - lags[direct])
-    return DelayEstimate(
-        delay,
-        delay / sample_rate,
-        response,
-        residual_response,
-        lags,
-        direct,
-        echo,
+    if candidates.size < num_echoes:
+        raise RuntimeError(
+            f"Requested {num_echoes} echo(es), but only {candidates.size} credible delayed "
+            "peak(s) remained after direct-path cancellation."
+        )
+    strongest = np.argsort(residual_magnitude[candidates])[-num_echoes:]
+    echoes = np.sort(candidates[strongest])
+    delays = (lags[echoes] - lags[direct]).astype(int)
+    return MultipathDelayEstimate(
+        delay_samples=delays,
+        delay_seconds=delays / sample_rate,
+        response=response,
+        residual_response=residual_response,
+        lags=lags,
+        direct_index=direct,
+        echo_indices=echoes,
     )
 
 

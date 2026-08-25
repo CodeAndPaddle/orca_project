@@ -14,9 +14,10 @@ from scipy.io import wavfile
 from orca import (
     ContourConfig,
     ExperimentConfig,
-    estimate_delay,
+    estimate_delays,
     extract_contours,
     synthetic_whistle,
+    synthesize_multipath,
     template_from_contour,
 )
 
@@ -33,11 +34,17 @@ def write_whistle(path: Path, stereo: bool = False):
     return time, frequency, samples
 
 
-def make_received(source, delay_samples, echo_gain=0.2, seed=7):
-    impulse = np.zeros(delay_samples + 1)
-    impulse[[0, delay_samples]] = [0.5, echo_gain]
-    received = signal.convolve(source, impulse)
-    return received + 0.01 * np.random.default_rng(seed).standard_normal(received.size)
+def make_received(source, delay_samples, echo_gains=0.2, seed=7):
+    delays = np.atleast_1d(delay_samples)
+    gains = np.broadcast_to(echo_gains, delays.shape)
+    received, _ = synthesize_multipath(
+        source,
+        delays,
+        gains,
+        noise_std=0.01,
+        seed=seed,
+    )
+    return received
 
 
 @pytest.fixture(scope="module")
@@ -84,10 +91,103 @@ def test_ten_millisecond_sidelobe_regression(extraction):
 
     true_delay = 480
     received = make_received(source, true_delay)
-    estimate = estimate_delay(received, template, FS)
-    assert abs(estimate.delay_samples - true_delay) <= 2
+    estimate = estimate_delays(received, template, FS, num_echoes=1)
+    assert abs(estimate.delay_samples[0] - true_delay) <= 2
 
-    assert abs(estimate.delay_samples / FS - 0.010) <= 50e-6
+    assert abs(estimate.delay_samples[0] / FS - 0.010) <= 50e-6
+
+
+def test_synthesize_multipath_impulse_and_deterministic_noise():
+    source = np.array([1.0, -0.5, 0.25])
+    delays = np.array([2, 4])
+    gains = np.array([0.2, 0.1])
+    noiseless, impulse = synthesize_multipath(source, delays, gains)
+
+    np.testing.assert_allclose(impulse, [0.5, 0.0, 0.2, 0.0, 0.1])
+    np.testing.assert_allclose(noiseless, signal.convolve(source, impulse))
+    first, _ = synthesize_multipath(source, delays, gains, noise_std=0.01, seed=19)
+    second, _ = synthesize_multipath(source, delays, gains, noise_std=0.01, seed=19)
+    np.testing.assert_array_equal(first, second)
+    assert first.size == source.size + delays[-1]
+
+
+def test_experiment_normalizes_multipath_sequences():
+    experiment = ExperimentConfig(
+        sample_rate=48_000,
+        true_delay_seconds=[0.010, 0.012],
+        echo_gains=[0.20, 0.15],
+    )
+    assert experiment.true_delay_seconds == (0.010, 0.012)
+    assert experiment.echo_gains == (0.20, 0.15)
+    np.testing.assert_array_equal(experiment.delay_samples, [480, 576])
+
+
+@pytest.mark.parametrize(
+    "delays,gains",
+    [
+        ([], []),
+        ([2.5], [0.2]),
+        ([4, 2], [0.2, 0.1]),
+        ([2, 2], [0.2, 0.1]),
+        ([2, 4], [0.2]),
+        ([2], [0.5]),
+        ([2], [float("nan")]),
+    ],
+)
+def test_synthesize_multipath_validation(delays, gains):
+    with pytest.raises(ValueError):
+        synthesize_multipath(np.ones(8), delays, gains)
+
+
+@pytest.mark.parametrize(
+    "delay_seconds,echo_gains",
+    [
+        ([0.010], [0.20]),
+        ([0.010, 0.020], [0.20, 0.15]),
+        ([0.005, 0.015, 0.025], [0.20, 0.15, 0.10]),
+    ],
+)
+def test_detects_arbitrary_echo_count_in_arrival_order(
+    extraction, delay_seconds, echo_gains
+):
+    result, _, _, source = extraction
+    template, _ = template_from_contour(result.contours[0], FS)
+    delays = np.rint(np.asarray(delay_seconds) * FS).astype(int)
+    estimate = estimate_delays(
+        make_received(source, delays, echo_gains),
+        template,
+        FS,
+        num_echoes=len(delays),
+    )
+
+    np.testing.assert_allclose(estimate.delay_samples, delays, atol=2, rtol=0)
+    assert np.all(np.diff(estimate.delay_samples) > 0)
+    assert np.all(np.diff(estimate.echo_indices) > 0)
+
+
+def test_arrival_order_is_independent_of_echo_strength(extraction):
+    result, _, _, source = extraction
+    template, _ = template_from_contour(result.contours[0], FS)
+    delays = np.array([round(0.010 * FS), round(0.020 * FS)])
+    estimate = estimate_delays(
+        make_received(source, delays, [0.10, 0.20]),
+        template,
+        FS,
+        num_echoes=2,
+    )
+    np.testing.assert_allclose(estimate.delay_samples, delays, atol=2, rtol=0)
+
+
+def test_insufficient_echoes_raise(extraction):
+    result, _, _, source = extraction
+    template, _ = template_from_contour(result.contours[0], FS)
+    with pytest.raises(RuntimeError, match="Requested 2 echo"):
+        estimate_delays(
+            make_received(source, round(0.010 * FS)),
+            template,
+            FS,
+            num_echoes=2,
+        )
 
 
 @pytest.mark.parametrize("delay_ms", [3, 5, 7, 10, 15, 20, 25, 30])
@@ -97,36 +197,42 @@ def test_delay_range_noise_and_gain(extraction, delay_ms, echo_gain, seed):
     result, _, _, source = extraction
     template, _ = template_from_contour(result.contours[0], FS)
     true_delay = round(delay_ms / 1_000 * FS)
-    estimate = estimate_delay(
+    estimate = estimate_delays(
         make_received(source, true_delay, echo_gain, seed),
         template,
         FS,
+        num_echoes=1,
     )
-    assert abs(estimate.delay_samples - true_delay) <= 2
+    assert abs(estimate.delay_samples[0] - true_delay) <= 2
 
 
 @pytest.mark.parametrize(
-    "sample_rate,min_delay,max_delay,prominence",
+    "sample_rate,num_echoes,min_delay,max_delay,min_separation,prominence",
     [
-        (0, 0.002, 0.030, 0.10),
-        (FS, 0.030, 0.030, 0.10),
-        (FS, 0.002, 0.030, 0.0),
-        (FS, 0.002, 0.030, 1.0),
+        (0, 1, 0.002, 0.030, 0.002, 0.10),
+        (FS, 0, 0.002, 0.030, 0.002, 0.10),
+        (FS, 1.5, 0.002, 0.030, 0.002, 0.10),
+        (FS, 1, 0.030, 0.030, 0.002, 0.10),
+        (FS, 1, 0.002, 0.030, 0.0, 0.10),
+        (FS, 1, 0.002, 0.030, 0.002, 0.0),
+        (FS, 1, 0.002, 0.030, 0.002, 1.0),
     ],
 )
 def test_delay_parameter_validation(
-    extraction, sample_rate, min_delay, max_delay, prominence
+    extraction, sample_rate, num_echoes, min_delay, max_delay, min_separation, prominence
 ):
     _, _, _, source = extraction
     template = signal.hilbert(source)
     template /= np.linalg.norm(template)
     with pytest.raises(ValueError):
-        estimate_delay(
+        estimate_delays(
             source,
             template,
             sample_rate,
+            num_echoes=num_echoes,
             min_delay_seconds=min_delay,
             max_delay_seconds=max_delay,
+            min_path_separation_seconds=min_separation,
             prominence_ratio=prominence,
         )
 
@@ -136,7 +242,7 @@ def test_direct_only_signal_has_no_echo(extraction):
     template = signal.hilbert(source)
     template /= np.linalg.norm(template)
     with pytest.raises(RuntimeError, match="direct-path cancellation"):
-        estimate_delay(source, template, FS)
+        estimate_delays(source, template, FS, num_echoes=1)
 
 
 def test_multiple_intervals_use_npz_offsets(extraction, tmp_path):
@@ -214,7 +320,8 @@ def test_adaptive_rate_and_duration_grid(tmp_path, sample_rate, duration_seconds
     experiment = ExperimentConfig(
         sample_rate=sample_rate,
         duration_seconds=duration_seconds,
-        true_delay_seconds=0.02,
+        true_delay_seconds=[0.02],
+        echo_gains=[0.2],
         wav_path=tmp_path / "whistle.wav",
         output_dir=tmp_path / "output",
     )
@@ -247,17 +354,17 @@ def test_adaptive_rate_and_duration_grid(tmp_path, sample_rate, duration_seconds
     )
     assert fitted[0] == pytest.approx(experiment.whistle_band_hz[0])
     assert fitted[-1] == pytest.approx(experiment.whistle_band_hz[1])
-    estimate = estimate_delay(
+    estimate = estimate_delays(
         make_received(source, experiment.delay_samples),
         template,
         experiment.sample_rate,
-        experiment.min_delay_seconds,
-        experiment.max_delay_seconds,
+        num_echoes=len(experiment.true_delay_seconds),
+        min_delay_seconds=experiment.min_delay_seconds,
+        max_delay_seconds=experiment.max_delay_seconds,
+        min_path_separation_seconds=experiment.min_path_separation_seconds,
     )
-    assert (
-        abs(estimate.delay_seconds - experiment.true_delay_seconds)
-        <= experiment.delay_error_tolerance_seconds
-    )
+    errors = abs(estimate.delay_seconds - np.asarray(experiment.true_delay_seconds))
+    assert np.all(errors <= experiment.delay_error_tolerance_seconds)
 
 
 @pytest.mark.parametrize(
@@ -272,8 +379,22 @@ def test_adaptive_rate_and_duration_grid(tmp_path, sample_rate, duration_seconds
         {"analysis_margin_hz": -1.0},
         {"sample_rate": 24_001, "whistle_band_hz": (4_000.0, 12_000.0)},
         {"min_delay_seconds": 0.03, "max_delay_seconds": 0.03},
-        {"true_delay_seconds": 0.05},
-        {"duration_seconds": 0.1, "true_delay_seconds": 0.1, "max_delay_seconds": 0.1},
+        {"true_delay_seconds": []},
+        {"true_delay_seconds": [0.01], "echo_gains": [0.2, 0.1]},
+        {"true_delay_seconds": [0.02, 0.01]},
+        {"true_delay_seconds": [0.01, 0.01]},
+        {"true_delay_seconds": [0.01, 0.011]},
+        {"true_delay_seconds": [0.01, float("nan")]},
+        {"true_delay_seconds": [0.01, 0.05]},
+        {"echo_gains": [0.2, 0.5]},
+        {"direct_gain": 0.0},
+        {"min_path_separation_seconds": 0.0},
+        {
+            "duration_seconds": 0.1,
+            "true_delay_seconds": [0.1],
+            "echo_gains": [0.2],
+            "max_delay_seconds": 0.1,
+        },
     ],
 )
 def test_experiment_configuration_validation(overrides):
