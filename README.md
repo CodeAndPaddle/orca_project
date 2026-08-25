@@ -7,6 +7,28 @@ estimates a reflected-path delay after cancelling the stronger direct arrival.
 ```text
 synthetic WAV → contour → analytic template → matched filter → delay
 ```
+Goal
+
+- Generate an artificial signal and a delayed copy of it.
+- Estimate the slant delay $\tau$ from the resulting filter response.
+
+Approach
+
+1. Build a synthetic source signal $s(t)$, for example a short whistle like waveform.
+2. Define a filter $h(t)$ that combines a scaled version of the signal with a delayed copy.
+   - Example: $h(t)=0.5\,\delta(t)+0.2\,\delta(t-\tau)$
+3. Form the received signal $r(t)=s(t) * h(t)$.
+4. Add a small amount of Gaussian noise to the received signal, e.g. $r(t) + 0.01\,\text{noise}$.
+5. Estimate the time-frequency contour of the synthetic signal $\tilde S(t)$ using the Lixing code.
+6. Correlate or convolve $\tilde S(t)$ with $r(t)$ to recover an approximate impulse response $\tilde h(t)$.
+   - The goal is that $\tilde S(t) * r(t) \approx \delta(t) * h(t) = h(t)$.
+7. Identify peaks in $\tilde h(t)$ and compute the time difference between the main peak and the delayed peak.
+   - This time difference is the slant delay $\tau$.
+
+Notes
+
+- Use the same sampling rate for $s(t)$ and $h(t)$ so both are consistent as sampled signals.
+- Keep the noise level low so the delay estimation remains reliable.
 
 ## Setup
 
