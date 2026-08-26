@@ -1,0 +1,160 @@
+2019-04-18 22:37:02,955 INFO Status  - Started script
+2019-04-18 22:37:03,048 INFO Status  - only 1 channel detected
+2019-04-18 22:37:03,060 INFO Status  - Start Entropy detector
+2019-04-18 22:37:05,500 INFO Status  - Finished Entropy detector
+2019-04-18 22:37:05,516 INFO Status  - Start "whistle scaling"
+2019-04-18 22:37:05,566 INFO Status  - Finished "whistle scaling"
+2019-04-18 22:37:05,579 INFO Status  - Start correlation detector
+2019-04-18 22:37:05,604 INFO Status  - Finished correlation detector
+2019-04-18 22:37:05,607 INFO Status  - Remove short whistles before tracing
+2019-04-18 22:37:05,611 INFO Status  - Start Viterbi algorithm
+2019-04-18 22:37:05,647 INFO Status  - Finished Viterbi algo
+2019-04-18 22:37:05,650 INFO Status  - Finished Viterbi algorithm
+2019-04-18 22:37:56,228 INFO Status  - Started script
+2019-04-18 22:37:56,258 INFO Status  - only 1 channel detected
+2019-04-18 22:37:56,261 INFO Status  - Start Entropy detector
+2019-04-18 22:37:57,359 INFO Status  - Finished Entropy detector
+2019-04-18 22:37:57,364 INFO Status  - Start "whistle scaling"
+2019-04-18 22:37:57,370 INFO Status  - Finished "whistle scaling"
+2019-04-18 22:37:57,389 INFO Status  - Start correlation detector
+2019-04-18 22:37:57,554 INFO Status  - Finished correlation detector
+2019-04-18 22:37:57,560 INFO Status  - Remove short whistles before tracing
+2019-04-18 22:37:57,568 INFO Status  - Start Viterbi algorithm
+2019-04-18 22:37:58,611 INFO Status  - Finished Viterbi algo
+2019-04-18 22:37:58,617 INFO Status  - Finished Viterbi algorithm
+2019-04-18 22:39:57,241 INFO Status  - Started script
+2019-04-18 22:39:57,279 INFO Status  - only 1 channel detected
+2019-04-18 22:39:57,283 INFO Status  - Start Entropy detector
+2019-04-18 22:39:58,226 INFO Status  - Finished Entropy detector
+2019-04-18 22:39:58,228 INFO Status  - Start "whistle scaling"
+2019-04-18 22:39:58,234 INFO Status  - Finished "whistle scaling"
+2019-04-18 22:39:58,241 INFO Status  - Start correlation detector
+2019-04-18 22:39:58,246 INFO Status  - Finished correlation detector
+2019-04-18 22:39:58,251 INFO Status  - Remove short whistles before tracing
+2019-04-18 22:39:58,255 INFO Status  - Start Viterbi algorithm
+2019-04-18 22:39:58,264 INFO Status  - Finished Viterbi algo
+2019-04-18 22:39:58,269 INFO Status  - Finished Viterbi algorithm
+2019-04-18 22:39:58,340 INFO Status  - Started script
+2019-04-18 22:39:58,345 INFO Status  - only 1 channel detected
+2019-04-18 22:39:58,349 INFO Status  - Start Entropy detector
+2019-04-18 22:39:59,266 INFO Status  - Finished Entropy detector
+2019-04-18 22:39:59,270 INFO Status  - Start "whistle scaling"
+2019-04-18 22:39:59,278 INFO Status  - Finished "whistle scaling"
+2019-04-18 22:39:59,290 INFO Status  - Start correlation detector
+2019-04-18 22:39:59,395 INFO Status  - Finished correlation detector
+2019-04-18 22:39:59,400 INFO Status  - Remove short whistles before tracing
+2019-04-18 22:39:59,406 INFO Status  - Start Viterbi algorithm
+2019-04-18 22:39:59,712 INFO Status  - Finished Viterbi algo
+2019-04-18 22:39:59,718 INFO Status  - Finished Viterbi algorithm
+2019-04-18 22:40:55,065 INFO Status  - Started script
+2019-04-18 22:40:55,109 INFO Status  - only 1 channel detected
+2019-04-18 22:40:55,114 INFO Status  - Start Entropy detector
+2019-04-18 22:40:56,007 INFO Status  - Finished Entropy detector
+2019-04-18 22:40:56,012 INFO Status  - Start "whistle scaling"
+2019-04-18 22:40:56,026 INFO Status  - Finished "whistle scaling"
+2019-04-18 22:40:56,036 INFO Status  - Start correlation detector
+2019-04-18 22:40:56,046 INFO Status  - Finished correlation detector
+2019-04-18 22:40:56,052 INFO Status  - Remove short whistles before tracing
+2019-04-18 22:40:56,062 INFO Status  - Start Viterbi algorithm
+2019-04-18 22:40:56,074 INFO Status  - Finished Viterbi algo
+2019-04-18 22:40:56,084 INFO Status  - Finished Viterbi algorithm
+2019-04-18 22:40:56,210 INFO Status  - Started script
+2019-04-18 22:40:56,215 INFO Status  - only 1 channel detected
+2019-04-18 22:40:56,220 INFO Status  - Start Entropy detector
+2019-04-18 22:40:57,159 INFO Status  - Finished Entropy detector
+2019-04-18 22:40:57,164 INFO Status  - Start "whistle scaling"
+2019-04-18 22:40:57,178 INFO Status  - Finished "whistle scaling"
+2019-04-18 22:40:57,201 INFO Status  - Start correlation detector
+2019-04-18 22:40:57,332 INFO Status  - Finished correlation detector
+2019-04-18 22:40:57,337 INFO Status  - Remove short whistles before tracing
+2019-04-18 22:40:57,346 INFO Status  - Start Viterbi algorithm
+2019-04-18 22:40:57,677 INFO Status  - Finished Viterbi algo
+2019-04-18 22:40:57,687 INFO Status  - Finished Viterbi algorithm
+2019-04-18 22:41:59,885 INFO Status  - Started script
+2019-04-18 22:41:59,918 INFO Status  - only 1 channel detected
+2019-04-18 22:41:59,922 INFO Status  - Start Entropy detector
+2019-04-18 22:42:00,847 INFO Status  - Finished Entropy detector
+2019-04-18 22:42:00,851 INFO Status  - Start "whistle scaling"
+2019-04-18 22:42:00,864 INFO Status  - Finished "whistle scaling"
+2019-04-18 22:42:00,874 INFO Status  - Start correlation detector
+2019-04-18 22:42:00,883 INFO Status  - Finished correlation detector
+2019-04-18 22:42:00,891 INFO Status  - Remove short whistles before tracing
+2019-04-18 22:42:00,899 INFO Status  - Start Viterbi algorithm
+2019-04-18 22:42:00,910 INFO Status  - Finished Viterbi algo
+2019-04-18 22:42:00,917 INFO Status  - Finished Viterbi algorithm
+2019-04-18 22:42:01,048 INFO Status  - Started script
+2019-04-18 22:42:01,052 INFO Status  - only 1 channel detected
+2019-04-18 22:42:01,056 INFO Status  - Start Entropy detector
+2019-04-18 22:42:01,913 INFO Status  - Finished Entropy detector
+2019-04-18 22:42:01,917 INFO Status  - Start "whistle scaling"
+2019-04-18 22:42:01,930 INFO Status  - Finished "whistle scaling"
+2019-04-18 22:42:01,945 INFO Status  - Start correlation detector
+2019-04-18 22:42:02,062 INFO Status  - Finished correlation detector
+2019-04-18 22:42:02,067 INFO Status  - Remove short whistles before tracing
+2019-04-18 22:42:02,073 INFO Status  - Start Viterbi algorithm
+2019-04-18 22:42:02,343 INFO Status  - Finished Viterbi algo
+2019-04-18 22:42:02,352 INFO Status  - Finished Viterbi algorithm
+2019-04-18 22:42:02,381 INFO Status  - Started script
+2019-04-18 22:42:02,383 INFO Status  - only 1 channel detected
+2019-04-18 22:42:02,388 INFO Status  - Start Entropy detector
+2019-04-18 22:42:03,195 INFO Status  - Finished Entropy detector
+2019-04-18 22:42:03,200 INFO Status  - Start "whistle scaling"
+2019-04-18 22:42:03,207 INFO Status  - Finished "whistle scaling"
+2019-04-18 22:42:03,215 INFO Status  - Start correlation detector
+2019-04-18 22:42:03,220 INFO Status  - Finished correlation detector
+2019-04-18 22:42:03,225 INFO Status  - Remove short whistles before tracing
+2019-04-18 22:42:03,230 INFO Status  - Start Viterbi algorithm
+2019-04-18 22:42:03,236 INFO Status  - Finished Viterbi algo
+2019-04-18 22:42:03,240 INFO Status  - Finished Viterbi algorithm
+2019-04-18 22:50:39,473 INFO Status  - Started script
+2019-04-18 22:50:39,505 INFO Status  - only 1 channel detected
+2019-04-18 22:50:39,510 INFO Status  - Start Entropy detector
+2019-04-18 22:50:40,374 INFO Status  - Finished Entropy detector
+2019-04-18 22:50:40,379 INFO Status  - Start "whistle scaling"
+2019-04-18 22:50:40,388 INFO Status  - Finished "whistle scaling"
+2019-04-18 22:50:40,400 INFO Status  - Start correlation detector
+2019-04-18 22:50:40,422 INFO Status  - Finished correlation detector
+2019-04-18 22:50:40,434 INFO Status  - Remove short whistles before tracing
+2019-04-18 22:50:40,447 INFO Status  - Start Viterbi algorithm
+2019-04-18 22:50:40,464 INFO Status  - Finished Viterbi algo
+2019-04-18 22:50:40,475 INFO Status  - Finished Viterbi algorithm
+2019-04-18 23:05:35,658 INFO Status  - Started script
+2019-04-18 23:05:35,690 INFO Status  - only 1 channel detected
+2019-04-18 23:05:35,694 INFO Status  - Start Entropy detector
+2019-04-18 23:05:36,382 INFO Status  - Finished Entropy detector
+2019-04-18 23:05:36,390 INFO Status  - Start "whistle scaling"
+2019-04-18 23:05:36,403 INFO Status  - Finished "whistle scaling"
+2019-04-18 23:05:36,415 INFO Status  - Start correlation detector
+2019-04-18 23:05:36,423 INFO Status  - Finished correlation detector
+2019-04-18 23:05:36,426 INFO Status  - Remove short whistles before tracing
+2019-04-18 23:05:36,432 INFO Status  - Start Viterbi algorithm
+2019-04-18 23:05:36,442 INFO Status  - Finished Viterbi algo
+2019-04-18 23:05:36,447 INFO Status  - Finished Viterbi algorithm
+2019-04-18 23:06:28,841 INFO Status  - Started script
+2019-04-18 23:06:28,848 INFO Status  - only 1 channel detected
+2019-04-18 23:06:28,853 INFO Status  - Start Entropy detector
+2019-04-18 23:07:25,117 INFO Status  - Finished Entropy detector
+2026-03-18 10:25:27,702 INFO Status  - Started script
+2026-03-18 10:25:27,735 INFO Status  - only 1 channel detected
+2026-03-18 10:25:27,739 INFO Status  - Start Entropy detector
+2026-03-18 10:25:30,035 INFO Status  - Finished Entropy detector
+2026-03-18 10:25:30,044 INFO Status  - Start "whistle scaling"
+2026-03-18 10:25:30,071 INFO Status  - Finished "whistle scaling"
+2026-03-18 10:25:30,078 INFO Status  - Start correlation detector
+2026-03-18 10:25:30,083 INFO Status  - Finished correlation detector
+2026-03-18 10:25:30,083 INFO Status  - Remove short whistles before tracing
+2026-03-18 10:25:30,084 INFO Status  - Start Viterbi algorithm
+2026-03-18 10:25:30,092 INFO Status  - Finished Viterbi algo
+2026-03-18 10:25:30,093 INFO Status  - Finished Viterbi algorithm
+2026-03-18 10:26:04,707 INFO Status  - Started script
+2026-03-18 10:26:04,713 INFO Status  - only 1 channel detected
+2026-03-18 10:26:04,714 INFO Status  - Start Entropy detector
+2026-03-18 10:26:05,208 INFO Status  - Finished Entropy detector
+2026-03-18 10:26:05,222 INFO Status  - Start "whistle scaling"
+2026-03-18 10:26:05,223 INFO Status  - Finished "whistle scaling"
+2026-03-18 10:26:05,228 INFO Status  - Start correlation detector
+2026-03-18 10:26:05,272 INFO Status  - Finished correlation detector
+2026-03-18 10:26:05,273 INFO Status  - Remove short whistles before tracing
+2026-03-18 10:26:05,274 INFO Status  - Start Viterbi algorithm
+2026-03-18 10:26:05,467 INFO Status  - Finished Viterbi algo
+2026-03-18 10:26:05,468 INFO Status  - Finished Viterbi algorithm
