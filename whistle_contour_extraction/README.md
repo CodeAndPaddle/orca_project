@@ -1,5 +1,10 @@
 # Dolphin Whistle Contour Extraction
 
+This folder is now a compatibility/example entry point. The maintained
+implementation lives in `Slant_delay_utills`; `main.py` delegates to its
+automatic multi-whistle detector so the repository has one production
+algorithm.
+
 Automatic extraction of dolphin whistle frequency contours from underwater audio recordings using Viterbi-based spectral peak tracking.
 
 ## Folder Structure
@@ -50,12 +55,9 @@ pip install -r requirements.txt
 python main.py data/dolphin_whistle_waw_dataset/000204_2145_1.15.wav
 ```
 
-**Batch (all WAVs in a directory):**
-```bash
-python main.py data/dolphin_whistle_waw_dataset output
-```
-
-Saves spectrogram + contour overlay PNGs to the output directory.
+The compatibility script prints every detected interval and confidence. Use
+`Finding_Slant_delay.ipynb` for contour and matched-filter plots and structured
+delay output.
 
 ## Project Structure
 

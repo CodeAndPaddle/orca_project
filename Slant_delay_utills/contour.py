@@ -33,6 +33,12 @@ class ContourConfig:
     jump_penalty: tuple[float, float] = (0.010, 0.0005)
     min_confidence: float = 1.2
     smoothing_seconds: tuple[float, float] = (0.004, 0.005)
+    allow_inactive: bool = False
+    inactive_transition_penalty: float = 1.5
+    min_frame_score: float = 0.0
+    min_observed_fraction: float = 0.80
+    max_inactive_seconds: float = 0.050
+    max_boundary_fraction: float = 0.20
     figure_dynamic_range_db: float = 55.0
     figure_dpi: int = 150
 
@@ -56,6 +62,7 @@ class Contour:
     frequency_hz: np.ndarray
     raw_frequency_hz: np.ndarray
     path_scores: np.ndarray
+    observed_mask: np.ndarray
 
 
 @dataclass(frozen=True)
@@ -123,6 +130,29 @@ def extract_contours(
     result = Extraction(path, sample_rate, tuple(contours), destination)
     _save_npz(result, config)
     return result
+
+
+def extract_contours_from_samples(
+    samples: np.ndarray,
+    sample_rate: int,
+    intervals: Sequence[Sequence[float]],
+    config: ContourConfig | None = None,
+) -> tuple[Contour, ...]:
+    """Extract contours without writing artifacts or rereading a WAV file."""
+    config = config or ContourConfig()
+    sample_rate = int(sample_rate)
+    low_hz, high_hz = config.band_hz
+    if sample_rate <= 0 or low_hz <= 0 or high_hz <= low_hz or high_hz >= sample_rate / 2:
+        raise ValueError(
+            f"Frequency band {config.band_hz} Hz is invalid for a {sample_rate} Hz signal."
+        )
+    converted = _as_float(np.asarray(samples))
+    duration = converted.shape[0] / sample_rate
+    normalized = _validate_intervals(intervals, duration)
+    return tuple(
+        _extract_interval(converted, sample_rate, interval, index, config)[0]
+        for index, interval in enumerate(normalized, start=1)
+    )
 
 
 def _as_float(samples: np.ndarray) -> np.ndarray:
@@ -284,11 +314,14 @@ def _track(
     score = enhanced[:, selected]
     interval_duration = end - start
     max_slope = config.slope_margin * abs(config.band_hz[1] - config.band_hz[0]) / interval_duration
-    rows = _viterbi(score, frequencies, selected_times, config, max_slope)
+    rows, observed = _viterbi(score, frequencies, selected_times, config, max_slope)
     columns = np.arange(rows.size)
     path_scores = score[rows, columns]
     raw_frequency = frequencies[rows]
     frequency = _refine(score, frequencies, rows)
+    if config.allow_inactive and np.any(observed):
+        active_columns = np.flatnonzero(observed)
+        frequency = np.interp(columns, active_columns, frequency[active_columns])
     dt = _spacing(selected_times)
     frequency = ndimage.median_filter(
         frequency, size=_odd(config.smoothing_seconds[0] / dt), mode="nearest"
@@ -299,16 +332,30 @@ def _track(
     inside = (selected_times >= start) & (selected_times <= end)
     if inside.sum() < 2:
         raise ValueError(f"Interval {index} has no usable ridge frames.")
-    confidence = float(path_scores[inside].mean())
+    inside_observed = observed[inside]
+    active_scores = path_scores[inside][inside_observed]
+    confidence = float(active_scores.mean()) if active_scores.size else float("-inf")
+    observed_fraction = float(inside_observed.mean())
+    maximum_gap = _maximum_false_run(inside_observed) * dt
+    boundary = (rows[inside] == 0) | (rows[inside] == frequencies.size - 1)
+    boundary_fraction = float(boundary[inside_observed].mean()) if np.any(inside_observed) else 1.0
+    accepted = (
+        np.isfinite(confidence)
+        and confidence >= config.min_confidence
+        and observed_fraction >= config.min_observed_fraction
+        and maximum_gap <= config.max_inactive_seconds
+        and boundary_fraction <= config.max_boundary_fraction
+    )
     return Contour(
         index,
         interval,
-        bool(np.isfinite(confidence) and confidence >= config.min_confidence),
+        bool(accepted),
         confidence,
         selected_times[inside],
         frequency[inside],
         raw_frequency[inside],
         path_scores[inside],
+        inside_observed,
     )
 
 
@@ -318,12 +365,37 @@ def _viterbi(
     times: np.ndarray,
     config: ContourConfig,
     max_slope_hz_per_second: float,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     rows, columns = emission.shape
     df, dt = _spacing(frequencies), _spacing(times)
     max_jump = max(1, min(rows - 1, math.ceil(max_slope_hz_per_second * dt / df)))
-    previous = emission[:, 0].copy()
-    back = np.zeros((rows, columns), dtype=np.int32)
+    if not config.allow_inactive:
+        previous = emission[:, 0].copy()
+        back = np.zeros((rows, columns), dtype=np.int32)
+        linear, quadratic = config.jump_penalty
+        for column in range(1, columns):
+            best = np.full(rows, -np.inf)
+            parent = np.zeros(rows, dtype=np.int32)
+            for jump in range(-max_jump, max_jump + 1):
+                current = np.arange(max(0, jump), min(rows, rows + jump))
+                prior = current - jump
+                transition = previous[prior] - linear * abs(jump) - quadratic * jump * jump
+                better = transition > best[current]
+                best[current[better]] = transition[better]
+                parent[current[better]] = prior[better]
+            previous = emission[:, column] + best
+            back[:, column] = parent
+        path = np.empty(columns, dtype=int)
+        path[-1] = int(np.argmax(previous))
+        for column in range(columns - 1, 0, -1):
+            path[column - 1] = back[path[column], column]
+        return path, np.ones(columns, dtype=bool)
+
+    silence = rows
+    first_active = emission[:, 0].copy()
+    first_active[emission[:, 0] < config.min_frame_score] = -np.inf
+    previous = np.concatenate((first_active, np.array([0.0])))
+    back = np.zeros((rows + 1, columns), dtype=np.int32)
     linear, quadratic = config.jump_penalty
     for column in range(1, columns):
         best = np.full(rows, -np.inf)
@@ -335,13 +407,26 @@ def _viterbi(
             better = transition > best[current]
             best[current[better]] = transition[better]
             parent[current[better]] = prior[better]
-        previous = emission[:, column] + best
-        back[:, column] = parent
-    path = np.empty(columns, dtype=int)
-    path[-1] = int(np.argmax(previous))
+        from_silence = previous[silence] - config.inactive_transition_penalty
+        use_silence = from_silence > best
+        best[use_silence] = from_silence
+        parent[use_silence] = silence
+        active = emission[:, column] + best
+        active[emission[:, column] < config.min_frame_score] = -np.inf
+        silence_parents = previous.copy()
+        silence_parents[:rows] -= config.inactive_transition_penalty
+        silence_parent = int(np.argmax(silence_parents))
+        previous = np.concatenate((active, np.array([silence_parents[silence_parent]])))
+        back[:rows, column] = parent
+        back[silence, column] = silence_parent
+    states = np.empty(columns, dtype=int)
+    states[-1] = int(np.argmax(previous))
     for column in range(columns - 1, 0, -1):
-        path[column - 1] = back[path[column], column]
-    return path
+        states[column - 1] = back[states[column], column]
+    observed = states != silence
+    path = states.copy()
+    path[~observed] = 0
+    return path, observed
 
 
 def _refine(emission: np.ndarray, frequencies: np.ndarray, rows: np.ndarray) -> np.ndarray:
@@ -379,6 +464,7 @@ def _save_npz(result: Extraction, config: ContourConfig) -> None:
         frequency_hz=join("frequency_hz"),
         raw_frequency_hz=join("raw_frequency_hz"),
         path_scores=join("path_scores"),
+        observed_mask=join("observed_mask"),
     )
 
 
@@ -433,3 +519,9 @@ def _spacing(values: np.ndarray) -> float:
 def _odd(value: float) -> int:
     size = max(1, round(value))
     return size if size % 2 else size + 1
+
+
+def _maximum_false_run(mask: np.ndarray) -> int:
+    padded = np.concatenate(([True], np.asarray(mask, dtype=bool), [True]))
+    changes = np.flatnonzero(padded)
+    return int(np.max(np.diff(changes) - 1, initial=0))

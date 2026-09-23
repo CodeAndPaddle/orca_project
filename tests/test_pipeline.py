@@ -11,7 +11,8 @@ import pytest
 from scipy import signal
 from scipy.io import wavfile
 
-from orca import (
+from Slant_delay_utills import (
+    AnalysisConfig,
     ContourConfig,
     ExperimentConfig,
     estimate_delays,
@@ -19,6 +20,9 @@ from orca import (
     synthetic_whistle,
     synthesize_multipath,
     template_from_contour,
+    analyze_detections,
+    analyze_recording,
+    detect_whistles,
 )
 
 
@@ -85,7 +89,9 @@ def test_contour_accuracy_and_minimal_artifacts(extraction):
 
 def test_ten_millisecond_sidelobe_regression(extraction):
     result, _, _, source = extraction
-    template, fitted_frequency = template_from_contour(result.contours[0], FS)
+    template, fitted_frequency = template_from_contour(
+        result.contours[0], FS, reference_samples=source
+    )
     assert 3_500 < fitted_frequency.min() < 4_500
     assert 9_500 < fitted_frequency.max() < 10_500
 
@@ -151,7 +157,9 @@ def test_detects_arbitrary_echo_count_in_arrival_order(
     extraction, delay_seconds, echo_gains
 ):
     result, _, _, source = extraction
-    template, _ = template_from_contour(result.contours[0], FS)
+    template, _ = template_from_contour(
+        result.contours[0], FS, reference_samples=source
+    )
     delays = np.rint(np.asarray(delay_seconds) * FS).astype(int)
     estimate = estimate_delays(
         make_received(source, delays, echo_gains),
@@ -167,7 +175,9 @@ def test_detects_arbitrary_echo_count_in_arrival_order(
 
 def test_arrival_order_is_independent_of_echo_strength(extraction):
     result, _, _, source = extraction
-    template, _ = template_from_contour(result.contours[0], FS)
+    template, _ = template_from_contour(
+        result.contours[0], FS, reference_samples=source
+    )
     delays = np.array([round(0.010 * FS), round(0.020 * FS)])
     estimate = estimate_delays(
         make_received(source, delays, [0.10, 0.20]),
@@ -180,7 +190,9 @@ def test_arrival_order_is_independent_of_echo_strength(extraction):
 
 def test_insufficient_echoes_raise(extraction):
     result, _, _, source = extraction
-    template, _ = template_from_contour(result.contours[0], FS)
+    template, _ = template_from_contour(
+        result.contours[0], FS, reference_samples=source
+    )
     with pytest.raises(RuntimeError, match="Requested 2 echo"):
         estimate_delays(
             make_received(source, round(0.010 * FS)),
@@ -195,7 +207,9 @@ def test_insufficient_echoes_raise(extraction):
 @pytest.mark.parametrize("seed", [1, 7])
 def test_delay_range_noise_and_gain(extraction, delay_ms, echo_gain, seed):
     result, _, _, source = extraction
-    template, _ = template_from_contour(result.contours[0], FS)
+    template, _ = template_from_contour(
+        result.contours[0], FS, reference_samples=source
+    )
     true_delay = round(delay_ms / 1_000 * FS)
     estimate = estimate_delays(
         make_received(source, true_delay, echo_gain, seed),
@@ -351,9 +365,12 @@ def test_adaptive_rate_and_duration_grid(tmp_path, sample_rate, duration_seconds
         contour,
         experiment.sample_rate,
         experiment.whistle_band_hz,
+        reference_samples=source,
     )
-    assert fitted[0] == pytest.approx(experiment.whistle_band_hz[0])
-    assert fitted[-1] == pytest.approx(experiment.whistle_band_hz[1])
+    observed = contour.observed_mask
+    fitted_time = contour.time_seconds[observed][0] + np.arange(fitted.size) / sample_rate
+    expected_fitted = np.interp(fitted_time, target_time, target_frequency)
+    assert np.sqrt(np.mean((fitted - expected_fitted) ** 2)) < 500
     estimate = estimate_delays(
         make_received(source, experiment.delay_samples),
         template,
@@ -400,3 +417,191 @@ def test_adaptive_rate_and_duration_grid(tmp_path, sample_rate, duration_seconds
 def test_experiment_configuration_validation(overrides):
     with pytest.raises(ValueError):
         ExperimentConfig(**overrides)
+
+
+def write_unknown_time_recording(
+    path: Path,
+    *,
+    delays: tuple[float, ...] = (0.010, 0.020),
+    starts: tuple[float, ...] = (0.40,),
+    seed: int = 11,
+):
+    rng = np.random.default_rng(seed)
+    total = np.zeros(round(2.2 * FS))
+    source_time, source_frequency, source = synthetic_whistle(
+        duration_seconds=0.4,
+        sample_rate=FS,
+        start_hz=4_000,
+        end_hz=10_000,
+    )
+    delay_samples = np.rint(np.asarray(delays) * FS).astype(int)
+    gains = np.linspace(0.20, 0.10, len(delays))
+    for start in starts:
+        if delays:
+            received, _ = synthesize_multipath(
+                source,
+                delay_samples,
+                gains,
+                noise_std=0,
+            )
+        else:
+            received = 0.5 * source
+        first = round(start * FS)
+        total[first : first + received.size] += received
+    total += 0.002 * rng.standard_normal(total.size)
+    pcm = np.int16(total / max(abs(total).max(), 1e-12) * np.iinfo(np.int16).max)
+    wavfile.write(path, FS, pcm)
+    return source_time, source_frequency
+
+
+def test_detects_all_unknown_time_whistles(tmp_path):
+    wav_path = tmp_path / "unknown.wav"
+    write_unknown_time_recording(wav_path, starts=(0.35, 1.25))
+    config = AnalysisConfig(
+        whistle_band_hz=(3_500, 10_500),
+        output_dir=tmp_path / "analysis",
+    )
+    detections = detect_whistles(wav_path, config)
+    assert len(detections) == 2
+    np.testing.assert_allclose(
+        [item.start_seconds for item in detections], [0.35, 1.25], atol=0.05
+    )
+    assert all(item.end_seconds > item.start_seconds for item in detections)
+    assert all(item.observed_mask.mean() >= 0.80 for item in detections)
+    staged = analyze_detections(wav_path, config, detections)
+    assert len(staged.whistles) == 2
+    for result in staged.whistles:
+        np.testing.assert_allclose(
+            result.delay_seconds, [0.010, 0.020], atol=2 / FS, rtol=0
+        )
+
+
+def test_recording_pipeline_estimates_unknown_time_delays(tmp_path):
+    wav_path = tmp_path / "unknown-delay.wav"
+    write_unknown_time_recording(wav_path)
+    config = AnalysisConfig(
+        whistle_band_hz=(3_500, 10_500),
+        output_dir=tmp_path / "analysis",
+    )
+    result = analyze_recording(wav_path, config)
+    assert len(result.whistles) == 1
+    np.testing.assert_allclose(
+        result.whistles[0].delay_seconds, [0.010, 0.020], atol=2 / FS, rtol=0
+    )
+    assert (result.output_dir / "analysis.npz").is_file()
+    with np.load(result.output_dir / "analysis.npz", allow_pickle=False) as archive:
+        assert archive["schema_version"] == 1
+        assert archive["intervals"].shape == (1, 2)
+
+
+def test_staged_detection_analysis_matches_convenience_pipeline(tmp_path):
+    wav_path = tmp_path / "staged-delay.wav"
+    write_unknown_time_recording(wav_path)
+    detection_config = AnalysisConfig(
+        whistle_band_hz=(3_500, 10_500),
+        output_dir=tmp_path / "staged",
+    )
+    detections = detect_whistles(wav_path, detection_config)
+    staged = analyze_detections(wav_path, detection_config, detections)
+    automatic = analyze_recording(
+        wav_path,
+        replace(detection_config, output_dir=tmp_path / "automatic"),
+    )
+    assert len(staged.whistles) == len(automatic.whistles) == 1
+    np.testing.assert_array_equal(
+        staged.whistles[0].delay_samples,
+        automatic.whistles[0].delay_samples,
+    )
+    np.testing.assert_allclose(
+        staged.whistles[0].response,
+        automatic.whistles[0].response,
+    )
+    np.testing.assert_array_equal(
+        staged.whistles[0].echo_indices,
+        automatic.whistles[0].echo_indices,
+    )
+
+
+def test_staged_analysis_supports_empty_detections(tmp_path):
+    wav_path = tmp_path / "empty-detections.wav"
+    wavfile.write(wav_path, FS, np.zeros(FS, dtype=np.int16))
+    config = AnalysisConfig(
+        whistle_band_hz=(3_500, 10_500),
+        output_dir=tmp_path / "analysis",
+    )
+    result = analyze_detections(wav_path, config, ())
+    assert result.whistles == ()
+    assert (result.output_dir / "analysis.npz").is_file()
+
+
+def test_staged_analysis_rejects_invalid_detections(tmp_path):
+    wav_path = tmp_path / "invalid-detections.wav"
+    write_unknown_time_recording(wav_path, starts=(0.35, 1.25))
+    config = AnalysisConfig(
+        whistle_band_hz=(3_500, 10_500),
+        output_dir=tmp_path / "analysis",
+    )
+    detections = detect_whistles(wav_path, config)
+    assert len(detections) == 2
+
+    with pytest.raises(ValueError, match="ordered and non-overlapping"):
+        analyze_detections(wav_path, config, detections[::-1])
+    with pytest.raises(ValueError, match="non-finite metadata"):
+        analyze_detections(
+            wav_path,
+            config,
+            (replace(detections[0], start_seconds=float("nan")),),
+        )
+    with pytest.raises(ValueError, match="aligned one-dimensional"):
+        analyze_detections(
+            wav_path,
+            config,
+            (replace(detections[0], frequency_hz=detections[0].frequency_hz[:-1]),),
+        )
+    with pytest.raises(ValueError, match="outside whistle_band_hz"):
+        analyze_detections(
+            wav_path,
+            config,
+            (replace(detections[0], frequency_hz=np.zeros_like(detections[0].frequency_hz)),),
+        )
+
+
+def test_unknown_time_pipeline_rejects_silence(tmp_path):
+    wav_path = tmp_path / "silence.wav"
+    wavfile.write(wav_path, FS, np.zeros(FS, dtype=np.int16))
+    config = AnalysisConfig(
+        whistle_band_hz=(3_500, 10_500),
+        output_dir=tmp_path / "analysis",
+    )
+    assert detect_whistles(wav_path, config) == ()
+    result = analyze_recording(wav_path, config)
+    assert result.whistles == ()
+
+
+def test_unknown_time_pipeline_direct_only_has_no_delay(tmp_path):
+    wav_path = tmp_path / "direct-only.wav"
+    write_unknown_time_recording(wav_path, delays=())
+    config = AnalysisConfig(
+        whistle_band_hz=(3_500, 10_500),
+        output_dir=tmp_path / "analysis",
+    )
+    result = analyze_recording(wav_path, config)
+    assert len(result.whistles) == 1
+    assert result.whistles[0].delay_seconds.size == 0
+    assert result.whistles[0].warnings
+
+
+def test_unknown_time_pipeline_automatic_three_echoes(tmp_path):
+    wav_path = tmp_path / "three-echoes.wav"
+    write_unknown_time_recording(wav_path, delays=(0.005, 0.015, 0.025))
+    config = AnalysisConfig(
+        whistle_band_hz=(3_500, 10_500),
+        output_dir=tmp_path / "analysis",
+    )
+    result = analyze_recording(wav_path, config)
+    np.testing.assert_allclose(
+        result.whistles[0].delay_seconds,
+        [0.005, 0.015, 0.025],
+        atol=2 / FS,
+        rtol=0,
+    )

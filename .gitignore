@@ -6,4 +6,6 @@ __pycache__/
 
 # Reproducible notebook outputs
 synthetic_dolphin_chirp.wav
+synthetic_dolphin_chirp_ground_truth.npz
 synthetic_dolphin_contours/
+whistle_analysis/

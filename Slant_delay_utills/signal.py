@@ -147,6 +147,8 @@ class MultipathDelayEstimate:
     lags: np.ndarray
     direct_index: int
     echo_indices: np.ndarray
+    echo_prominences: np.ndarray
+    delay_confidence: np.ndarray
 
 
 def synthetic_whistle(
@@ -213,52 +215,76 @@ def template_from_contour(
     sample_rate: int,
     frequency_band_hz: tuple[float, float] = (4_000.0, 10_000.0),
     taper: float = 0.25,
-    max_contour_rmse_hz: float = 500.0,
+    max_contour_rmse_hz: float | None = None,
+    reference_samples: np.ndarray | None = None,
+    reference_start_seconds: float = 0.0,
+    phase_smoothing_seconds: float = 0.020,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Validate the ridge and return a band-calibrated analytic template."""
+    """Build a contour-guided, unit-energy analytic whistle template."""
     if not contour.accepted:
         raise ValueError("Cannot build a template from a rejected contour.")
-    start, end = contour.interval
-    count = round((end - start) * sample_rate)
-    time = start + np.arange(count) / sample_rate
-    if count < 2:
-        raise ValueError("Contour interval is too short for template reconstruction.")
     contour_time = np.asarray(contour.time_seconds, dtype=float)
     contour_frequency = np.asarray(contour.frequency_hz, dtype=float)
+    observed = np.asarray(
+        getattr(contour, "observed_mask", np.ones(contour_time.size, dtype=bool)),
+        dtype=bool,
+    )
     if (
         contour_time.ndim != 1
         or contour_frequency.shape != contour_time.shape
+        or observed.shape != contour_time.shape
         or contour_time.size < 2
         or not np.all(np.isfinite(contour_time))
         or not np.all(np.isfinite(contour_frequency))
         or np.any(np.diff(contour_time) <= 0)
-        or contour_time[0] < start - 1 / sample_rate
-        or contour_time[-1] > end + 1 / sample_rate
+        or observed.sum() < 2
     ):
-        raise ValueError("Contour points must be finite, ordered, and inside the interval.")
+        raise ValueError("Contour points must be finite, ordered, and contain observations.")
+    contour_time = contour_time[observed]
+    contour_frequency = contour_frequency[observed]
+    start = float(contour_time[0])
+    end = float(contour_time[-1])
+    count = round((end - start) * sample_rate) + 1
+    time = start + np.arange(count) / sample_rate
+    if count < 2:
+        raise ValueError("Contour interval is too short for template reconstruction.")
     start_hz, end_hz = frequency_band_hz
     if not 0 < start_hz < end_hz < sample_rate / 2:
         raise ValueError("frequency_band_hz is incompatible with the sample rate.")
 
-    def calibrated_frequency(times: np.ndarray) -> np.ndarray:
-        x = -1.0 + 2.0 * (times - start) / (time[-1] - start)
-        shape = _shape(x)
-        reference_shape = _shape(np.array([-1.0, 1.0]))
-        normalized = (shape - reference_shape[0]) / np.ptp(reference_shape)
-        return start_hz + (end_hz - start_hz) * normalized
-
-    expected_ridge = calibrated_frequency(contour_time)
-    contour_rmse = float(np.sqrt(np.mean((contour_frequency - expected_ridge) ** 2)))
-    if not np.isfinite(contour_rmse) or contour_rmse > max_contour_rmse_hz:
-        raise ValueError(
-            f"Extracted contour RMSE ({contour_rmse:.1f} Hz) exceeds "
-            f"the {max_contour_rmse_hz:.1f} Hz limit."
-        )
-    fitted = calibrated_frequency(time)
+    if np.any(contour_frequency < start_hz) or np.any(contour_frequency > end_hz):
+        raise ValueError("Observed contour lies outside frequency_band_hz.")
+    fitted = np.interp(time, contour_time, contour_frequency)
     if np.any(fitted <= 0) or np.any(fitted >= sample_rate / 2):
         raise ValueError("Fitted contour lies outside the usable frequency range.")
     phase = np.zeros(count)
     phase[1:] = 2 * np.pi * np.cumsum((fitted[:-1] + fitted[1:]) / (2 * sample_rate))
+    if reference_samples is not None:
+        reference = np.asarray(reference_samples, dtype=float)
+        if reference.ndim != 1 or not reference.size or not np.all(np.isfinite(reference)):
+            raise ValueError("reference_samples must be a finite one-dimensional signal.")
+        first = round((start - reference_start_seconds) * sample_rate)
+        last = first + count
+        if first < 0 or last > reference.size:
+            raise ValueError("The contour template interval is outside reference_samples.")
+        analytic = signal.hilbert(reference[first:last])
+        usable = np.abs(analytic) > 0.05 * np.max(np.abs(analytic))
+        if np.count_nonzero(usable) >= 2:
+            recovered = np.unwrap(np.angle(analytic))
+            instantaneous = np.gradient(recovered) * sample_rate / (2 * np.pi)
+            instantaneous = np.interp(
+                np.arange(count), np.flatnonzero(usable), instantaneous[usable]
+            )
+            smooth_size = min(count - (1 - count % 2), round(phase_smoothing_seconds * sample_rate))
+            if smooth_size % 2 == 0:
+                smooth_size -= 1
+            if smooth_size >= 5:
+                instantaneous = signal.savgol_filter(instantaneous, smooth_size, 3)
+            instantaneous = np.clip(instantaneous, start_hz, end_hz)
+            phase[0] = recovered[np.flatnonzero(usable)[0]]
+            phase[1:] = phase[0] + 2 * np.pi * np.cumsum(
+                (instantaneous[:-1] + instantaneous[1:]) / (2 * sample_rate)
+            )
     template = signal.windows.tukey(count, alpha=taper) * np.exp(1j * phase)
     template /= np.linalg.norm(template)
     return template, fitted
@@ -269,7 +295,8 @@ def estimate_delays(
     template: np.ndarray,
     sample_rate: int,
     *,
-    num_echoes: int,
+    num_echoes: int | None = None,
+    max_echoes: int = 4,
     min_delay_seconds: float = 0.002,
     max_delay_seconds: float = 0.030,
     min_path_separation_seconds: float = 0.002,
@@ -284,10 +311,15 @@ def estimate_delays(
         raise ValueError("received and template must contain only finite values.")
     if sample_rate <= 0:
         raise ValueError("sample_rate must be positive.")
-    if isinstance(num_echoes, bool) or not isinstance(num_echoes, (int, np.integer)):
-        raise ValueError("num_echoes must be a positive integer.")
-    if num_echoes <= 0:
-        raise ValueError("num_echoes must be a positive integer.")
+    if num_echoes is not None:
+        if isinstance(num_echoes, bool) or not isinstance(num_echoes, (int, np.integer)):
+            raise ValueError("num_echoes must be a positive integer or None.")
+        if num_echoes <= 0:
+            raise ValueError("num_echoes must be a positive integer or None.")
+    if isinstance(max_echoes, bool) or not isinstance(max_echoes, (int, np.integer)):
+        raise ValueError("max_echoes must be a positive integer.")
+    if max_echoes <= 0:
+        raise ValueError("max_echoes must be a positive integer.")
     if not 0 < min_delay_seconds < max_delay_seconds:
         raise ValueError("Require 0 < min_delay_seconds < max_delay_seconds.")
     if min_path_separation_seconds <= 0:
@@ -314,7 +346,7 @@ def estimate_delays(
     minimum = max(1, round(min_delay_seconds * sample_rate))
     maximum = round(max_delay_seconds * sample_rate)
     minimum_separation = max(1, round(min_path_separation_seconds * sample_rate))
-    peaks, _ = signal.find_peaks(
+    peaks, properties = signal.find_peaks(
         residual_magnitude,
         distance=minimum_separation,
         prominence=prominence_ratio * magnitude[direct],
@@ -323,14 +355,21 @@ def estimate_delays(
         (lags[peaks] >= lags[direct] + minimum)
         & (lags[peaks] <= lags[direct] + maximum)
     ]
-    if candidates.size < num_echoes:
+    if num_echoes is not None and candidates.size < num_echoes:
         raise RuntimeError(
             f"Requested {num_echoes} echo(es), but only {candidates.size} credible delayed "
             "peak(s) remained after direct-path cancellation."
         )
-    strongest = np.argsort(residual_magnitude[candidates])[-num_echoes:]
+    requested = min(max_echoes, candidates.size) if num_echoes is None else num_echoes
+    strongest = np.argsort(residual_magnitude[candidates])[-requested:] if requested else np.array([], dtype=int)
     echoes = np.sort(candidates[strongest])
     delays = (lags[echoes] - lags[direct]).astype(int)
+    peak_positions = {int(index): position for position, index in enumerate(peaks)}
+    prominences = np.array(
+        [properties["prominences"][peak_positions[int(index)]] for index in echoes],
+        dtype=float,
+    )
+    confidence = np.clip(prominences / max(magnitude[direct], np.finfo(float).eps), 0.0, 1.0)
     return MultipathDelayEstimate(
         delay_samples=delays,
         delay_seconds=delays / sample_rate,
@@ -339,6 +378,8 @@ def estimate_delays(
         lags=lags,
         direct_index=direct,
         echo_indices=echoes,
+        echo_prominences=prominences,
+        delay_confidence=confidence,
     )
 
 

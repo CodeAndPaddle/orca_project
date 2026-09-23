@@ -1,5 +1,55 @@
 # Orca slant-delay experiment
 
+## Unknown-time WAV workflow
+
+The primary workflow now accepts a complete WAV without manually supplied
+whistle intervals. It detects every separated whistle, extracts a contour,
+builds a contour-guided phase template, and searches for credible reflected
+paths after cancelling the dominant direct arrival.
+
+```python
+from pathlib import Path
+
+from Slant_delay_utills import (
+    AnalysisConfig,
+    analyze_detections,
+    analyze_recording,
+    detect_whistles,
+)
+
+config = AnalysisConfig(
+    whistle_band_hz=(3_500.0, 10_500.0),  # required; must be below Nyquist
+    min_delay_seconds=0.002,
+    max_delay_seconds=0.030,
+    max_echoes=4,
+    output_dir=Path("whistle_analysis"),
+)
+analysis = analyze_recording("unknown_recording.wav", config)
+
+for whistle in analysis.whistles:
+    print(whistle.detection.start_seconds, whistle.detection.end_seconds)
+    print(whistle.delay_seconds, whistle.delay_confidence, whistle.warnings)
+```
+
+For a visible staged workflow, detect once and pass those immutable results to
+the analysis stage. This is the flow demonstrated in the notebook:
+
+```python
+detections = detect_whistles("unknown_recording.wav", config)
+analysis = analyze_detections("unknown_recording.wav", config, detections)
+```
+
+For a reproducible notebook test, run `Synthetic_Slant_Delay_Validation.ipynb`
+first. It generates `synthetic_dolphin_chirp.wav` with 10 ms and 20 ms echoes,
+saves its ground truth separately, and verifies the estimator. Then run
+`Finding_Slant_delay.ipynb`, which independently detects and analyzes that WAV
+without using the ground truth during estimation.
+
+Each analysis run stores a pickle-free `analysis.npz`. The detector supports
+multiple separated whistles; simultaneous overlapping whistles remain an
+ambiguous single-path case. Real-recording delay estimates are experimental
+until validated against labeled data.
+
 This project generates a dolphin-like whistle, extracts its time-frequency
 contour from a manually selected WAV interval, builds an analytic template, and
 estimates multiple reflected-path delays after cancelling the stronger direct arrival.
@@ -41,13 +91,13 @@ python -m pip install -r requirements.txt
 jupyter lab Finding_Slant_delay.ipynb
 ```
 
-Run the notebook from top to bottom. Its single `ExperimentConfig` block is the
-place to change the sample rate, duration, delays, gains, noise, frequency band, search
-bounds, and output paths.
+The notebook uses `AnalysisConfig` for unknown-time WAV files. The
+`ExperimentConfig` below remains available for controlled synthetic experiments
+and regression tests.
 
 ```python
 from pathlib import Path
-from orca import ExperimentConfig
+from Slant_delay_utills import ExperimentConfig
 
 config = ExperimentConfig(
     sample_rate=24_001,
@@ -74,7 +124,7 @@ ordered by arrival time.
 ## Multi-path synthesis and estimation
 
 ```python
-from orca import estimate_delays, synthesize_multipath
+from Slant_delay_utills import estimate_delays, synthesize_multipath
 
 received, impulse_response = synthesize_multipath(
     source,
@@ -113,7 +163,7 @@ resolved window length.
 ## Extraction API and artifacts
 
 ```python
-from orca import extract_contours
+from Slant_delay_utills import extract_contours
 
 result = extract_contours(
     config.wav_path,
@@ -124,9 +174,13 @@ result = extract_contours(
 contour = next(item for item in result.contours if item.accepted)
 ```
 
-Intervals are absolute seconds from the beginning of the WAV. Automatic
-whistle detection is not included; the extractor tracks one contour across
-each entire supplied interval.
+Intervals are absolute seconds from the beginning of the WAV. This lower-level
+API remains manual; use `detect_whistles` or `analyze_recording` when interval
+locations are unknown.
+
+For delay work, pass bandpassed reference samples to `template_from_contour` so
+the contour defines the trajectory and interval while the analytic phase is
+recovered from the recording. `analyze_recording` performs this automatically.
 
 Each run writes only:
 
@@ -145,5 +199,5 @@ timestamps, frequencies, and signed enhancement path scores. Load it with
 ## Tests
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 pytest -q -p no:cacheprovider
+PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider
 ```
